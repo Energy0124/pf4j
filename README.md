@@ -3,12 +3,21 @@ Plugin Framework for Java (PF4J)
 A plugin is a way for a third party to extend the functionality of an application. A plugin implements extension points
 declared by application or other plugins. Also a plugin can define extension points.  
 
+**NOTE:** Starting with version 0.9 you can define an extension directly in the application jar (you're not obligated to put the extension in a plugin - you can see this extension as a default/system extension). See [WhazzupGreeting](https://github.com/decebals/pf4j/blob/master/demo/app/src/main/java/ro/fortsoft/pf4j/demo/WhazzupGreeting.java) for a real example.  
+
 Current build status:  [![Build Status](https://buildhive.cloudbees.com/job/decebals/job/pf4j/badge/icon)](https://buildhive.cloudbees.com/job/decebals/job/pf4j/)
 
 Features/Benefits
 -------------------
-With PF4J you can easily transform a monolithic java application in a modular application. 
-PF4J is an open source (Apache license) lightweight (around 35KB) plugin framework for java, with minimal dependencies and very extensible (see PluginDescriptorFinder and ExtensionFinder).
+With PF4J you can easily transform a monolithic java application in a modular application.  
+PF4J is an open source (Apache license) lightweight (around 50KB) plugin framework for java, with minimal dependencies (only slf4j-api) and very extensible (see PluginDescriptorFinder and ExtensionFinder).   
+
+Practically PF4J is a microframework and the aim is to keep the core simple but extensible. I try to create a little ecosystem (extensions) based on this core with the help of the comunity.  
+For now are available these extensions:
+- [wicket-plugin](https://github.com/decebals/wicket-plugin)
+- [pf4j-spring](https://github.com/decebals/pf4j-spring)
+- [pf4j-web](https://github.com/rmrodrigues/pf4j-web)
+- [pf4j-update](https://github.com/decebals/pf4j-update)
 
 No XML, only Java.
 
@@ -61,8 +70,8 @@ It's very simple to add pf4j in your application:
 
 In above code, I created a **DefaultPluginManager** (it's the default implementation for
 **PluginManager** interface) that loads and starts all active(resolved) plugins.  
-Each available plugin is loaded using a **PluginClassLoader**.   
-The **PluginClassLoader** contains only classes found in _classes_ and _lib_ folders of plugin and runtime classes and libraries of the required plugins. 
+Each available plugin is loaded using a different java class loader, **PluginClassLoader**.   
+The **PluginClassLoader** contains only classes found in **PluginClasspath** (default _classes_ and _lib_ folders) of plugin and runtime classes and libraries of the required/dependent plugins. This class loader is a _Parent Last ClassLoader_ - it loads the classes from the plugin's jars before delegating to the parent class loader.   
 The plugins are stored in a folder. You can specify the plugins folder in the constructor of DefaultPluginManager. If the plugins folder is not specified 
 than the location is returned by `System.getProperty("pf4j.pluginsDir", "plugins")`.
 
@@ -71,12 +80,12 @@ The structure of plugins folder is:
 * plugin2.zip (or plugin2 folder)
 
 In plugins folder you can put a plugin as folder or archive file (zip).
-A plugin folder has this structure:
+A plugin folder has this structure by default:
 * `classes` folder
 * `lib` folder (optional - if the plugin used third party libraries)
 
 The plugin manager searches plugins metadata using a **PluginDescriptorFinder**.   
-**DefaultPluginDescriptorFinder** lookups plugins descriptors in MANIFEST.MF file.
+**DefaultPluginDescriptorFinder** is a "link" to **ManifestPluginDescriptorFinder** that lookups plugins descriptors in MANIFEST.MF file.
 In this case the `classes/META-INF/MANIFEST.MF` file looks like:
 
     Manifest-Version: 1.0
@@ -101,8 +110,9 @@ You can define an extension point in your application using **ExtensionPoint** i
 
     }
 
-Another important internal component is **ExtensionFinder** that describes how plugin manager discovers extensions for extensions points.   
-**DefaultExtensionFinder** looks up extensions using **Extension** annotation.
+Another important internal component is **ExtensionFinder** that describes how the plugin manager discovers extensions for the extensions points.   
+**DefaultExtensionFinder** looks up extensions using **Extension** annotation.   
+DefaultExtensionFinder looks up extensions in all extensions index files `META-INF/extensions.idx`. PF4J uses Java Annotation Processing to process at compile time all classes annotated with @Extension and to produce the extensions index file.
 
     public class WelcomePlugin extends Plugin {
 
@@ -135,7 +145,7 @@ The output is:
     >>> Welcome
     >>> Hello
 
-You can inject your custom component (for example PluginDescriptorFinder, ExtensionFinder) in DefaultPluginManager just override createXXX methods (factory method pattern).
+You can inject your custom component (for example PluginDescriptorFinder, ExtensionFinder, PluginClasspath, ...) in DefaultPluginManager just override `create...` methods (factory method pattern).
 
 Example:
 
@@ -151,8 +161,74 @@ and in plugin respository you must have a plugin.properties file with the below 
     plugin.provider=Decebal Suiu
     plugin.version=0.0.1
     
+You can control extension instance creation overriding `createExtensionFactory` method from DefaultExtensionFinder. 
+Also, you can control plugin instance creation overriding `createPluginFactory` method from DefaultExtensionFinder. 
 
 For more information please see the demo sources.
+
+Plugin assembly
+------------------------------
+
+After you developed a plugin the next step is to deploy it in your application. For this task, one option is to create a zip file with a structure described in section [How to use](https://github.com/decebals/pf4j/blob/master/README.md#how-to-use) from the beginning of the document.  
+If you use `apache maven` as build manger than your pom.xml file must looks like [this](https://github.com/decebals/pf4j/blob/master/demo/plugins/plugin1/pom.xml). This file it's very simple and it's self explanatory.  
+If you use `apache ant` then your build.xml file must looks like [this](https://github.com/gitblit/gitblit-powertools-plugin/blob/master/build.xml). In this case please look at the "build" target.  
+
+Plugin lifecycle
+--------------------------
+Each plugin passes through a pre-defined set of states. [PluginState](https://github.com/decebals/pf4j/blob/master/pf4j/src/main/java/ro/fortsoft/pf4j/PluginState.java) defines all possible states.   
+The primary plugin states are:
+* CREATED
+* DISABLED
+* STARTED
+* STOPPED
+
+The DefaultPluginManager contains the following logic:
+* all plugins are resolved & loaded
+* *DISABLED* plugins are NOT automatically *STARTED* by pf4j in `startPlugins()` BUT you may manually start (and therefore enable) a *DISABLED* plugin by calling `startPlugin(pluginId)` instead of `enablePlugin(pluginId)` + `startPlugin(pluginId)`
+* only *STARTED* plugins may contribute extensions. Any other state should not be considered ready to contribute an extension to the running system.
+
+The differences between a DISABLED plugin and a STARTED plugin are:
+* a STARTED plugin has executed Plugin.start(), a DISABLED plugin has not
+* a STARTED plugin may contribute extension instances, a DISABLED plugin may not
+
+DISABLED plugins still have valid class loaders and their classes can be manually
+loaded and explored, but the resource loading - which is important for inspection - 
+has been handicapped by the DISABLED check.
+
+As integrators of pf4j evolve their extension APIs it will become
+a requirement to specify a minimum system version for loading plugins.
+Loading & starting a newer plugin on an older system could result in
+runtime failures due to method signature changes or other class
+differences.  
+For this reason was added a manifest attribute (in PluginDescriptor) to specify a 'requires' version
+which is a minimum system version. Also DefaultPluginManager contains a method to
+specify the system version of the plugin manager and the logic to disable
+plugins on load if the system version is too old (if you want total control, please override `isPluginValid()`). This works for both `loadPlugins()` and `loadPlugin()`.  
+
+__PluginStateListener__ defines the interface for an object that listens to plugin state changes. You can use `addPluginStateListener()` and `removePluginStateListener()` from PluginManager if you want to add or remove a plugin state listener.  
+
+Your application, as a PF4J consumer, has full control over each plugin (state). So, you can load, unload, enable, disable, start, stop and delete a certain plugin using PluginManager (programmatically).
+
+Development mode
+--------------------------
+PF4J can run in two modes: **DEVELOPMENT** and **DEPLOYMENT**.  
+The DEPLOYMENT(default) mode is the standard workflow for plugins creation: create a new Maven module for each plugin, codding the plugin (declares new extension points and/or 
+add new extensions), pack the plugin in a zip file, deploy the zip file to plugins folder. These operations are time consuming and from this reason I introduced the DEVELOPMENT runtime mode.  
+The main advantage of DEVELOPMENT runtime mode for a plugin developer is that he/she is not enforced to pack and deploy the plugins. In DEVELOPMENT mode you can developing plugins in a simple and fast mode.   
+
+Lets describe how DEVELOPMENT runtime mode works.
+
+First, you can change the runtime mode using the "pf4j.mode" system property or overriding `DefaultPluginManager.getRuntimeMode()`.  
+For example I run the pf4j demo in eclipse in DEVELOPMENT mode adding only `"-Dpf4j.mode=development"` to the pf4j demo launcher.  
+You can retrieve the current runtime mode using `PluginManager.getRuntimeMode()` or in your Plugin implementation with `getWrapper().getRuntimeMode()`(see [WelcomePlugin](https://github.com/decebals/pf4j/blob/master/demo/plugins/plugin1/src/main/java/ro/fortsoft/pf4j/demo/welcome/WelcomePlugin.java)).   
+The DefaultPluginManager determines automatically the correct runtime mode and for DEVELOPMENT mode overrides some components(pluginsDirectory is __"../plugins"__, __PropertiesPluginDescriptorFinder__ as PluginDescriptorFinder, __DevelopmentPluginClasspath__ as PluginClassPath).  
+Another advantage of DEVELOPMENT runtime mode is that you can execute some code lines only in this mode (for example more debug messages). 
+
+**Note:** If you use Eclipse than make sure annotation processing is enabled at least for any projects registering objects using annotations. In the properties for your new project go to __Java Compiler > Annotation Processing__
+Check the __“Enable Project Specific Settings”__ and make sure __“Enable annotation processing”__ is checked.  
+If you use Maven as build manger, after each dependency modification in your plugin (Maven module) you must run __Maven > Update Project...__   
+
+For more details see the demo application. 
 
 Enable/Disable plugins
 -------------------
@@ -191,18 +267,48 @@ If a file with enabled.txt exists than disabled.txt is ignored. See enabled.txt 
 Demo
 -------------------
 I have a tiny demo application. The demo application is in demo folder.
-In demo/api folder I declared an extension point (_Greeting_).  
-In demo/plugin* I implemented two plugins: plugin1, plugin2 (each plugin adds an extension for _Greeting_).  
+In demo/api folder I declared an extension point ( _Greeting_).  
+In demo/plugins I implemented two plugins: plugin1, plugin2 (each plugin adds an extension for _Greeting_).  
 
 To run the demo application use:  
  
     ./run-demo.sh (for Linux/Unix)
     ./run-demo.bat (for Windows)
 
+How to build
+-------------------
+Requirements: 
+- [Git](http://git-scm.com/) 
+- JDK 7 (test with `java -version`)
+- [Apache Maven 3](http://maven.apache.org/) (test with `mvn -version`)
+
+Steps:
+- create a local clone of this repository (with `git clone https://github.com/decebals/pf4j.git`)
+- go to project's folder (with `cd pf4j`) 
+- build the artifacts (with `mvn clean package` or `mvn clean install`)
+
+After above steps a folder _pf4j/target_ is created and all goodies are in that folder.
+
 Mailing list
 --------------
 
 Much of the conversation between developers and users is managed through [mailing list] (http://groups.google.com/group/pf4j).
+
+Versioning
+------------
+PF4J will be maintained under the Semantic Versioning guidelines as much as possible.
+
+Releases will be numbered with the follow format:
+
+`<major>.<minor>.<patch>`
+
+And constructed with the following guidelines:
+
+* Breaking backward compatibility bumps the major
+* New additions without breaking backward compatibility bumps the minor
+* Bug fixes and misc changes bump the patch
+
+For more information on SemVer, please visit http://semver.org/.
 
 License
 --------------
